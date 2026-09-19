@@ -1,0 +1,301 @@
+--[[
+    ███████╗██╗   ██╗██╗██╗         ███╗   ███╗ ██████╗ ██████╗ ████████╗██╗   ██╗
+    ██╔════╝██║   ██║██║██║         ████╗ ████║██╔═══██╗██╔══██╗╚══██╔══╝╚██╗ ██╔╝
+    █████╗  ██║   ██║██║██║         ██╔████╔██║██║   ██║██████╔╝   ██║    ╚████╔╝ 
+    ██╔══╝  ╚██╗ ██╔╝██║██║         ██║╚██╔╝██║██║   ██║██╔══██╗   ██║     ╚██╔╝  
+    ███████╗ ╚████╔╝ ██║███████╗    ██║ ╚═╝ ██║╚██████╔╝██║  ██║   ██║      ██║   
+    ╚══════╝  ╚═══╝  ╚═╝╚══════╝    ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝      ╚═╝   
+    
+    Evil Morty Script v9.0 (Mobile / Arceus X / Delta / Fluxus)
+    Part 1 / 3 — ЯДРО: сервисы, конфиг, утилиты, GUI, загрузчик модулей.
+]]
+
+-- ============================================================
+-- КОНФИГ
+-- ============================================================
+local CONFIG = {
+    VERSION = "9.0",
+    GUI_NAME = "EvilMortyGui_v9",
+    BASE_URL = "", -- сюда можно вписать raw-URL GitHub для автозагрузки модулей
+    AUTO_LOAD_MODULES = true,
+    DEBUG = false,
+}
+
+-- ============================================================
+-- СЕРВИСЫ
+-- ============================================================
+local Players       = game:GetService("Players")
+local RunService    = game:GetService("RunService")
+local UIS           = game:GetService("UserInputService")
+local TweenService  = game:GetService("TweenService")
+local HttpService   = game:GetService("HttpService")
+local Lighting      = game:GetService("Lighting")
+local StarterGui    = game:GetService("StarterGui")
+local VirtualUser   = game:GetService("VirtualUser")
+local ContextAction = game:GetService("ContextActionService")
+
+local LP     = Players.LocalPlayer
+local camera = workspace.CurrentCamera
+
+-- Ждём загрузки персонажа
+local function waitForCharacter()
+    if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then return end
+    local deadline = tick() + 30
+    repeat
+        task.wait(0.2)
+    until (LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")) or tick() > deadline
+end
+waitForCharacter()
+
+-- ============================================================
+-- ЛОГГЕР
+-- ============================================================
+local function log(...)
+    if CONFIG.DEBUG then
+        print("[EvilMorty v" .. CONFIG.VERSION .. "]", ...)
+    end
+end
+local function warn2(...)
+    warn("[EvilMorty]", ...)
+end
+
+-- ============================================================
+-- ГЛОБАЛЬНЫЙ КОНТЕКСТ
+-- ============================================================
+_G.EvilMorty = _G.EvilMorty or {}
+local CTX = _G.EvilMorty
+
+CTX.VERSION       = CONFIG.VERSION
+CTX.LP            = LP
+CTX.camera        = camera
+CTX.Players       = Players
+CTX.RunService    = RunService
+CTX.UIS           = UIS
+CTX.TweenService  = TweenService
+CTX.HttpService   = HttpService
+CTX.Lighting      = Lighting
+CTX.CONFIG        = CONFIG
+CTX.modules       = {}
+CTX.utils         = {}
+CTX.log           = log
+CTX.warn          = warn2
+
+-- ============================================================
+-- УТИЛИТЫ
+-- ============================================================
+local U = {}
+
+-- Безопасный рейкаст вниз от точки (ищем пол)
+function U.raycastGround(pos, ignore)
+    local ignoreList = ignore or (LP.Character and {LP.Character} or {})
+    local ray = Ray.new(pos + Vector3.new(0, 80, 0), Vector3.new(0, -300, 0))
+    local hit, hitPos, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
+    if hit then
+        return hitPos + Vector3.new(0, 3, 0), hitPos, hitNormal
+    end
+    return pos, pos, Vector3.new(0, 1, 0)
+end
+
+-- Универсальный рейкаст из точки по направлению
+function U.raycast(origin, direction, ignore)
+    local ignoreList = ignore or (LP.Character and {LP.Character} or {})
+    local ray = Ray.new(origin, direction)
+    local hit, hitPos, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ignoreList)
+    return hit, hitPos, hitNormal
+end
+
+-- Эффект телепорта: жёлтая сфера + свет + частицы + твин
+function U.teleportEffect(pos, color, size)
+    color = color or Color3.fromRGB(255, 220, 0)
+    size  = size or 15
+
+    local ball = Instance.new("Part")
+    ball.Name = "EvilTeleportFX"
+    ball.Size = Vector3.new(1, 1, 1)
+    ball.Shape = Enum.PartType.Ball
+    ball.Color = color
+    ball.Material = Enum.Material.Neon
+    ball.Anchored = true
+    ball.CanCollide = false
+    ball.CanQuery = false
+    ball.CanTouch = false
+    ball.CFrame = CFrame.new(pos)
+    ball.Parent = workspace
+
+    local light = Instance.new("PointLight")
+    light.Color = color
+    light.Brightness = 10
+    light.Range = size * 1.5
+    light.Shadows = false
+    light.Parent = ball
+
+    local attach = Instance.new("Attachment")
+    attach.Parent = ball
+
+    local emit = Instance.new("ParticleEmitter")
+    emit.Name = "TeleportParticles"
+    emit.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+    emit.Color = ColorSequence.new(color)
+    emit.Rate = 200
+    emit.Lifetime = NumberRange.new(0.5, 1)
+    emit.Speed = NumberRange.new(3, 8)
+    emit.Size = NumberSequence.new(0.5)
+    emit.LightEmission = 1
+    emit.Parent = attach
+
+    local tween = TweenService:Create(ball, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {
+        Size = Vector3.new(size, size, size),
+        Transparency = 1
+    })
+    tween:Play()
+    task.delay(0.6, function()
+        if ball and ball.Parent then ball:Destroy() end
+    end)
+end
+
+-- Звук телепорта
+function U.teleportSound(parent)
+    parent = parent or (LP.Character and LP.Character:FindFirstChild("HumanoidRootPart"))
+    if not parent then return end
+    local s = Instance.new("Sound")
+    s.SoundId = "rbxassetid://9114380053"
+    s.Volume = 2
+    s.PlayOnRemove = false
+    s.Parent = parent
+    s:Play()
+    task.delay(2, function() if s and s.Parent then s:Destroy() end end)
+end
+
+-- Создать кнопку в меню
+function U.makeButton(parent, text, yOffset, callback, color)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.9, 0, 0, 44)
+    btn.Position = UDim2.new(0.05, 0, 0, yOffset)
+    btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 45)
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 15
+    btn.Text = text
+    btn.AutoButtonColor = true
+    btn.Parent = parent
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 6)
+    corner.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        pcall(callback, btn)
+    end)
+    return btn
+end
+
+-- Создать отдельную плавающую кнопку на экране
+function U.makeFloatingButton(parent, text, size, pos, color, callback, draggable)
+    local btn = Instance.new("TextButton")
+    btn.Size = size or UDim2.new(0, 70, 0, 70)
+    btn.Position = pos or UDim2.new(0, 10, 0, 130)
+    btn.BackgroundColor3 = color or Color3.fromRGB(255, 200, 0)
+    btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 15
+    btn.Text = text
+    btn.Draggable = draggable or false
+    btn.Parent = parent
+
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(1, 0)
+    corner.Parent = btn
+
+    btn.MouseButton1Click:Connect(function()
+        pcall(callback)
+    end)
+    return btn
+end
+
+-- Округление
+function U.round(n) return math.floor(n + 0.5) end
+
+-- Безопасное получение HRP
+function U.getHRP(plr)
+    plr = plr or LP
+    local char = plr.Character
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+end
+
+CTX.utils = U
+
+-- ============================================================
+-- GUI
+-- ============================================================
+local gui = Instance.new("ScreenGui")
+gui.Name = CONFIG.GUI_NAME
+gui.ResetOnSpawn = false
+gui.IgnoreGuiInset = true
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+gui.Parent = LP:WaitForChild("PlayerGui")
+CTX.gui = gui
+
+-- Кнопка открытия меню
+local toggle = U.makeFloatingButton(
+    gui, "EM",
+    UDim2.new(0, 60, 0, 60),
+    UDim2.new(0, 10, 0, 60),
+    Color3.fromRGB(255, 0, 0),
+    function() end,
+    true
+)
+toggle.TextColor3 = Color3.new(1, 1, 1)
+toggle.TextSize = 22
+CTX.toggle = toggle
+
+-- Основное меню
+local main = Instance.new("Frame")
+main.Name = "Main"
+main.Size = UDim2.new(0, 260, 0, 400)
+main.Position = UDim2.new(0.5, -130, 0.5, -200)
+main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+main.BorderSizePixel = 2
+main.BorderColor3 = Color3.fromRGB(255, 0, 0)
+main.Active = true
+main.Draggable = true
+main.Visible = false
+main.Parent = gui
+CTX.main = main
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 8)
+mainCorner.Parent = main
+
+toggle.MouseButton1Click:Connect(function()
+    main.Visible = not main.Visible
+end)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 34)
+title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
+title.Text = "EVIL MORTY v" .. CONFIG.VERSION
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 17
+title.Parent = main
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 8)
+titleCorner.Parent = title
+
+-- Кнопка TP30S (фиксированная, нельзя двигать)
+local tp30Btn = U.makeFloatingButton(
+    gui, "TP30S",
+    UDim2.new(0, 70, 0, 70),
+    UDim2.new(0, 10, 0, 130),
+    Color3.fromRGB(255, 200, 0),
+    function()
+        local tp = CTX.modules.Teleport
+        if tp and tp.TP30S then tp.TP30S() end
+    end,
+    false
+)
+CTX.tp30Btn = tp30Btn
+
+log("Ядро загружено. GUI создан.")
