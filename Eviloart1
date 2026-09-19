@@ -5,340 +5,219 @@
     ██╔══╝  ╚██╗ ██╔╝██║██║         ██║╚██╔╝██║██║   ██║██╔══██╗   ██║     ╚██╔╝
     ███████╗ ╚████╔╝ ██║███████╗    ██║ ╚═╝ ██║╚██████╔╝██║  ██║   ██║      ██║
     ╚══════╝  ╚═══╝  ╚═╝╚══════╝    ╚═╝     ╚═╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝      ╚═╝
-
-    Evil Morty Script v10.0 (Mobile / Arceus X / Delta / Fluxus)
-    Part 1 / 3 — ЯДРО + УТИЛИТЫ + GUI + СОБЫТИЯ ТАПА
+    Evil Morty Script v11.0 — Part 1/3 (ЯДРО + GUI + УТИЛИТЫ)
 ]]
 
-local CONFIG = {
-    VERSION = "10.0",
-    GUI_NAME = "EvilMortyGui_v10",
-    DEBUG = true,
-}
+local CFG = { VERSION="11.0", GUI="EvilMortyV11", DEBUG=true }
 
-local Players      = game:GetService("Players")
-local RunService   = game:GetService("RunService")
-local UIS          = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
-local HttpService  = game:GetService("HttpService")
-local StarterGui   = game:GetService("StarterGui")
+local Players=game:GetService("Players")
+local RunService=game:GetService("RunService")
+local UIS=game:GetService("UserInputService")
+local TS=game:GetService("TweenService")
+local LP=Players.LocalPlayer
+local cam=workspace.CurrentCamera
 
-local LP     = Players.LocalPlayer
-local camera = workspace.CurrentCamera
+repeat task.wait(0.2) until LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")
 
--- Ждём персонажа
-local function waitChar()
-    if LP.Character and LP.Character:FindFirstChild("HumanoidRootPart") then return end
-    local t = tick() + 30
-    repeat task.wait(0.2) until (LP.Character and LP.Character:FindFirstChild("HumanoidRootPart")) or tick() > t
-end
-waitChar()
+local function log(...) if CFG.DEBUG then print("[EM v"..CFG.VERSION.."]",...) end end
+local function warn2(...) warn("[EM]",...) end
 
--- Логгер
-local function log(...) if CONFIG.DEBUG then print("[EvilMorty v" .. CONFIG.VERSION .. "]", ...) end end
-local function warn2(...) warn("[EvilMorty]", ...) end
+_G.EvilMorty=_G.EvilMorty or {}
+local C=_G.EvilMorty
 
--- Глобальный контекст
-_G.EvilMorty = _G.EvilMorty or {}
-local CTX = _G.EvilMorty
+C.VERSION=CFG.VERSION
+C.LP=LP
+C.cam=cam
+C.Players=Players
+C.RunService=RunService
+C.UIS=UIS
+C.TS=TS
+C.CFG=CFG
+C.modules={}
+C.utils={}
+C.tapHandlers={}
+C.log=log
+C.warn=warn2
 
-CTX.VERSION      = CONFIG.VERSION
-CTX.LP           = LP
-CTX.camera       = camera
-CTX.Players      = Players
-CTX.RunService   = RunService
-CTX.UIS          = UIS
-CTX.TweenService = TweenService
-CTX.HttpService  = HttpService
-CTX.CONFIG       = CONFIG
-CTX.modules      = {}
-CTX.utils        = {}
-CTX.log          = log
-CTX.warn         = warn2
-CTX.tapHandlers  = {} -- функции, которые вызываются при тапе по экрану (кроме GUI)
+-- ================= УТИЛИТЫ =================
+local U={}
 
--- ============================================================
--- УТИЛИТЫ
--- ============================================================
-local U = {}
-
--- Рейкаст вниз: ищем пол под точкой. Возвращает безопасную позицию + hit.
-function U.raycastGround(pos, ignore)
-    local ig = ignore or (LP.Character and {LP.Character} or {})
-    local ray = Ray.new(pos + Vector3.new(0, 120, 0), Vector3.new(0, -400, 0))
-    local hit, hitPos, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ig)
-    if hit then
-        return hitPos + Vector3.new(0, 3, 0), hitPos, hitNormal
-    end
-    return pos, pos, Vector3.new(0, 1, 0)
+function U.rayGround(pos,ig)
+    ig=ig or (LP.Character and {LP.Character} or {})
+    local r=Ray.new(pos+Vector3.new(0,120,0),Vector3.new(0,-400,0))
+    local h,hp,hn=workspace:FindPartOnRayWithIgnoreList(r,ig)
+    if h then return hp+Vector3.new(0,3,0),hp,hn end
+    return pos,pos,Vector3.new(0,1,0)
 end
 
--- Универсальный рейкаст
-function U.raycast(origin, direction, ignore)
-    local ig = ignore or (LP.Character and {LP.Character} or {})
-    local ray = Ray.new(origin, direction)
-    local hit, hitPos, hitNormal = workspace:FindPartOnRayWithIgnoreList(ray, ig)
-    return hit, hitPos, hitNormal
+function U.ray(origin,dir,ig)
+    ig=ig or (LP.Character and {LP.Character} or {})
+    local r=Ray.new(origin,dir)
+    return workspace:FindPartOnRayWithIgnoreList(r,ig)
 end
 
--- ПРАВИЛЬНЫЙ ТП ВПЕРЁД: идём от HRP, а не от камеры.
--- Делаем серию рейкастов, чтобы найти безопасную точку и не провалиться.
 function U.teleportForward(studs)
-    local char = LP.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return end
-
-    local look = camera.CFrame.LookVector
-    local flatLook = Vector3.new(look.X, 0, look.Z)
-    if flatLook.Magnitude < 0.1 then flatLook = Vector3.new(0, 0, -1) end
-    flatLook = flatLook.Unit
-
-    local startPos = hrp.CFrame.Position
-    local targetPos = startPos + flatLook * studs
-
-    -- Рейкаст от целевой точки вниз — ищем пол
-    local safe, hitPos, hitNormal = U.raycastGround(targetPos)
-
-    -- Проверяем, что между start и target нет стены (горизонтальный рейкаст)
-    local hRay = Ray.new(startPos + Vector3.new(0, 2, 0), flatLook * studs)
-    local hHit, hHitPos, hHitNormal = workspace:FindPartOnRayWithIgnoreList(hRay, {char})
-
-    if hHit and (hHitPos - startPos).Magnitude < studs - 1 then
-        -- стена: ставим игрока чуть раньше стены
-        local wallDist = (hHitPos - startPos).Magnitude - 2
-        if wallDist < 1 then wallDist = 1 end
-        local wallPos = startPos + flatLook * wallDist
-        local wSafe = U.raycastGround(wallPos)
-        return wSafe
+    local char=LP.Character; if not char then return end
+    local hrp=char:FindFirstChild("HumanoidRootPart"); if not hrp then return end
+    local look=cam.CFrame.LookVector
+    local flat=Vector3.new(look.X,0,look.Z)
+    if flat.Magnitude<0.1 then flat=Vector3.new(0,0,-1) end
+    flat=flat.Unit
+    local start=hrp.CFrame.Position
+    local target=start+flat*studs
+    local safe=U.rayGround(target)
+    local hRay=Ray.new(start+Vector3.new(0,2,0),flat*studs)
+    local hHit,hPos=workspace:FindPartOnRayWithIgnoreList(hRay,{char})
+    if hHit and (hPos-start).Magnitude<studs-1 then
+        local d=(hPos-start).Magnitude-2
+        if d<1 then d=1 end
+        return U.rayGround(start+flat*d)
     end
-
     return safe
 end
 
--- Эффект телепорта
-function U.teleportEffect(pos, color, size)
-    color = color or Color3.fromRGB(255, 220, 0)
-    size  = size or 15
-
-    local ball = Instance.new("Part")
-    ball.Name = "EvilTeleportFX"
-    ball.Size = Vector3.new(1, 1, 1)
-    ball.Shape = Enum.PartType.Ball
-    ball.Color = color
-    ball.Material = Enum.Material.Neon
-    ball.Anchored = true
-    ball.CanCollide = false
-    ball.CanQuery = false
-    ball.CanTouch = false
-    ball.CFrame = CFrame.new(pos)
-    ball.Parent = workspace
-
-    local light = Instance.new("PointLight")
-    light.Color = color
-    light.Brightness = 10
-    light.Range = size * 1.5
-    light.Shadows = false
-    light.Parent = ball
-
-    local attach = Instance.new("Attachment")
-    attach.Parent = ball
-
-    local emit = Instance.new("ParticleEmitter")
-    emit.Name = "TeleportParticles"
-    emit.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-    emit.Color = ColorSequence.new(color)
-    emit.Rate = 200
-    emit.Lifetime = NumberRange.new(0.5, 1)
-    emit.Speed = NumberRange.new(3, 8)
-    emit.Size = NumberSequence.new(0.5)
-    emit.LightEmission = 1
-    emit.Parent = attach
-
-    TweenService:Create(ball, TweenInfo.new(0.5, Enum.EasingStyle.Quad), {
-        Size = Vector3.new(size, size, size),
-        Transparency = 1
-    }):Play()
-    task.delay(0.6, function() if ball and ball.Parent then ball:Destroy() end end)
+function U.fx(pos,color,size)
+    color=color or Color3.fromRGB(255,220,0)
+    size=size or 15
+    local b=Instance.new("Part")
+    b.Name="EM_FX"; b.Size=Vector3.new(1,1,1)
+    b.Shape=Enum.PartType.Ball; b.Color=color
+    b.Material=Enum.Material.Neon; b.Anchored=true
+    b.CanCollide=false; b.CanQuery=false; b.CanTouch=false
+    b.CFrame=CFrame.new(pos); b.Parent=workspace
+    local l=Instance.new("PointLight")
+    l.Color=color; l.Brightness=10; l.Range=size*1.5; l.Shadows=false
+    l.Parent=b
+    local a=Instance.new("Attachment"); a.Parent=b
+    local e=Instance.new("ParticleEmitter")
+    e.Texture="rbxasset://textures/particles/sparkles_main.dds"
+    e.Color=ColorSequence.new(color); e.Rate=200
+    e.Lifetime=NumberRange.new(0.5,1); e.Speed=NumberRange.new(3,8)
+    e.Size=NumberSequence.new(0.5); e.LightEmission=1
+    e.Parent=a
+    TS:Create(b,TweenInfo.new(0.5),{Size=Vector3.new(size,size,size),Transparency=1}):Play()
+    task.delay(0.6,function() if b and b.Parent then b:Destroy() end end)
 end
 
--- Звук телепорта
-function U.teleportSound(parent)
-    parent = parent or (LP.Character and LP.Character:FindFirstChild("HumanoidRootPart"))
+function U.sound(parent)
+    parent=parent or (LP.Character and LP.Character:FindFirstChild("HumanoidRootPart"))
     if not parent then return end
-    local s = Instance.new("Sound")
-    s.SoundId = "rbxassetid://9114380053"
-    s.Volume = 2
-    s.Parent = parent
-    s:Play()
-    task.delay(2, function() if s and s.Parent then s:Destroy() end end)
+    local s=Instance.new("Sound")
+    s.SoundId="rbxassetid://9114380053"; s.Volume=2; s.Parent=parent; s:Play()
+    task.delay(2,function() if s and s.Parent then s:Destroy() end end)
 end
 
--- Кнопка в меню
-function U.makeButton(parent, text, yOffset, callback, color)
-    local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(0.9, 0, 0, 44)
-    btn.Position = UDim2.new(0.05, 0, 0, yOffset)
-    btn.BackgroundColor3 = color or Color3.fromRGB(45, 45, 45)
-    btn.TextColor3 = Color3.new(1, 1, 1)
-    btn.Font = Enum.Font.Gotham
-    btn.TextSize = 15
-    btn.Text = text
-    btn.AutoButtonColor = true
-    btn.Parent = parent
-
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(0, 6)
-    c.Parent = btn
-
-    btn.MouseButton1Click:Connect(function()
-        pcall(callback, btn)
-    end)
-    return btn
+function U.btn(parent,text,y,cb,color)
+    local b=Instance.new("TextButton")
+    b.Size=UDim2.new(0.9,0,0,42)
+    b.Position=UDim2.new(0.05,0,0,y)
+    b.BackgroundColor3=color or Color3.fromRGB(45,45,45)
+    b.TextColor3=Color3.new(1,1,1); b.Font=Enum.Font.Gotham
+    b.TextSize=15; b.Text=text; b.Parent=parent
+    local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(0,6); c.Parent=b
+    b.MouseButton1Click:Connect(function() pcall(cb,b) end)
+    return b
 end
 
--- Плавающая кнопка
-function U.makeFloatingButton(parent, text, size, pos, color, callback, draggable)
-    local btn = Instance.new("TextButton")
-    btn.Size = size or UDim2.new(0, 70, 0, 70)
-    btn.Position = pos or UDim2.new(0, 10, 0, 130)
-    btn.BackgroundColor3 = color or Color3.fromRGB(255, 200, 0)
-    btn.TextColor3 = Color3.fromRGB(0, 0, 0)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 15
-    btn.Text = text
-    btn.Draggable = draggable or false
-    btn.Parent = parent
-
-    local c = Instance.new("UICorner")
-    c.CornerRadius = UDim.new(1, 0)
-    c.Parent = btn
-
-    btn.MouseButton1Click:Connect(function()
-        pcall(callback)
-    end)
-    return btn
+function U.float(parent,text,size,pos,color,cb,drag)
+    local b=Instance.new("TextButton")
+    b.Size=size or UDim2.new(0,70,0,70)
+    b.Position=pos or UDim2.new(0,10,0,130)
+    b.BackgroundColor3=color or Color3.fromRGB(255,200,0)
+    b.TextColor3=Color3.fromRGB(0,0,0); b.Font=Enum.Font.GothamBold
+    b.TextSize=15; b.Text=text; b.Draggable=drag or false; b.Parent=parent
+    local c=Instance.new("UICorner"); c.CornerRadius=UDim.new(1,0); c.Parent=b
+    b.MouseButton1Click:Connect(function() pcall(cb) end)
+    return b
 end
 
 function U.getHRP(plr)
-    plr = plr or LP
-    local char = plr.Character
-    if not char then return nil end
-    return char:FindFirstChild("HumanoidRootPart")
+    plr=plr or LP
+    local ch=plr.Character; if not ch then return nil end
+    return ch:FindFirstChild("HumanoidRootPart")
 end
 
--- Проверка: тап по GUI или по миру
-function U.isTapOnGUI(x, y)
-    local gui = CTX.gui
-    if not gui then return false end
-    local objs = LP.PlayerGui:GetGuiObjectsAtPosition(x, y)
-    for _, g in pairs(objs) do
-        if g:IsDescendantOf(gui) then return true end
+function U.isTapOnGUI(x,y)
+    if not C.gui then return false end
+    local objs=LP.PlayerGui:GetGuiObjectsAtPosition(x,y)
+    for _,g in pairs(objs) do
+        if g:IsDescendantOf(C.gui) then return true end
     end
     return false
 end
 
-CTX.utils = U
+C.utils=U
 
--- ============================================================
--- ГЛОБАЛЬНЫЙ ОБРАБОТЧИК ТАПА
--- ============================================================
--- Все модули регистрируют свои функции в CTX.tapHandlers.
--- При тапе по экрану (не по GUI) они вызываются все.
-UIS.InputBegan:Connect(function(input, processed)
-    if processed then return end
-    if input.UserInputType == Enum.UserInputType.Touch then
-        local x, y = input.Position.X, input.Position.Y
-        if U.isTapOnGUI(x, y) then return end
-        for _, fn in ipairs(CTX.tapHandlers) do
-            pcall(fn, x, y)
-        end
+-- ============ ОБРАБОТЧИК ТАПА ============
+UIS.InputBegan:Connect(function(input,proc)
+    if proc then return end
+    if input.UserInputType==Enum.UserInputType.Touch then
+        local x,y=input.Position.X,input.Position.Y
+        if U.isTapOnGUI(x,y) then return end
+        for _,fn in ipairs(C.tapHandlers) do pcall(fn,x,y) end
     end
 end)
 
--- ============================================================
--- GUI
--- ============================================================
-local gui = Instance.new("ScreenGui")
-gui.Name = CONFIG.GUI_NAME
-gui.ResetOnSpawn = false
-gui.IgnoreGuiInset = true
-gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-gui.Parent = LP:WaitForChild("PlayerGui")
-CTX.gui = gui
+-- ================= GUI =================
+local gui=Instance.new("ScreenGui")
+gui.Name=CFG.GUI; gui.ResetOnSpawn=false
+gui.IgnoreGuiInset=true; gui.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+gui.Parent=LP:WaitForChild("PlayerGui")
+C.gui=gui
 
-local toggle = U.makeFloatingButton(
-    gui, "EM",
-    UDim2.new(0, 60, 0, 60),
-    UDim2.new(0, 10, 0, 60),
-    Color3.fromRGB(255, 0, 0),
-    function() end, true
-)
-toggle.TextColor3 = Color3.new(1, 1, 1)
-toggle.TextSize = 22
-CTX.toggle = toggle
+local toggle=U.float(gui,"EM",UDim2.new(0,60,0,60),UDim2.new(0,10,0,60),Color3.fromRGB(255,0,0),function() end,true)
+toggle.TextColor3=Color3.new(1,1,1); toggle.TextSize=22
+C.toggle=toggle
 
-local main = Instance.new("Frame")
-main.Name = "Main"
-main.Size = UDim2.new(0, 260, 0, 420)
-main.Position = UDim2.new(0.5, -130, 0.5, -210)
-main.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
-main.BorderSizePixel = 2
-main.BorderColor3 = Color3.fromRGB(255, 0, 0)
-main.Active = true
-main.Draggable = true
-main.Visible = false
-main.Parent = gui
-CTX.main = main
+local main=Instance.new("Frame")
+main.Size=UDim2.new(0,260,0,460)
+main.Position=UDim2.new(0.5,-130,0.5,-230)
+main.BackgroundColor3=Color3.fromRGB(20,20,20)
+main.BorderSizePixel=2; main.BorderColor3=Color3.fromRGB(255,0,0)
+main.Active=true; main.Draggable=true; main.Visible=false
+main.Parent=gui
+C.main=main
 
-local mc = Instance.new("UICorner")
-mc.CornerRadius = UDim.new(0, 8)
-mc.Parent = main
+local mc=Instance.new("UICorner"); mc.CornerRadius=UDim.new(0,8); mc.Parent=main
 
-toggle.MouseButton1Click:Connect(function()
-    main.Visible = not main.Visible
-end)
+toggle.MouseButton1Click:Connect(function() main.Visible=not main.Visible end)
 
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 34)
-title.BackgroundColor3 = Color3.fromRGB(255, 0, 0)
-title.Text = "EVIL MORTY v" .. CONFIG.VERSION
-title.TextColor3 = Color3.new(1, 1, 1)
-title.Font = Enum.Font.GothamBold
-title.TextSize = 17
-title.Parent = main
+local title=Instance.new("TextLabel")
+title.Size=UDim2.new(1,0,0,34)
+title.BackgroundColor3=Color3.fromRGB(255,0,0)
+title.Text="EVIL MORTY v"..CFG.VERSION
+title.TextColor3=Color3.new(1,1,1)
+title.Font=Enum.Font.GothamBold; title.TextSize=17
+title.Parent=main
 
-local tc = Instance.new("UICorner")
-tc.CornerRadius = UDim.new(0, 8)
-tc.Parent = title
+local tc=Instance.new("UICorner"); tc.CornerRadius=UDim.new(0,8); tc.Parent=title
 
--- Кнопка TP30S — фиксированная
-local tp30Btn = U.makeFloatingButton(
-    gui, "TP30S",
-    UDim2.new(0, 70, 0, 70),
-    UDim2.new(0, 10, 0, 130),
-    Color3.fromRGB(255, 200, 0),
-    function()
-        local tp = CTX.modules.Teleport
-        if tp and tp.TP30S then tp.TP30S() end
-    end, false
-)
-CTX.tp30Btn = tp30Btn
+-- Внутренний скролл для кнопок (их теперь много)
+local scroll=Instance.new("ScrollingFrame")
+scroll.Size=UDim2.new(1,-6,1,-40)
+scroll.Position=UDim2.new(0,3,0,38)
+scroll.BackgroundTransparency=1
+scroll.BorderSizePixel=0
+scroll.ScrollBarThickness=5
+scroll.CanvasSize=UDim2.new(0,0,0,0)
+scroll.AutomaticCanvasSize=Enum.AutomaticSize.Y
+scroll.Parent=main
+C.scroll=scroll
 
--- Кнопка "ОГОНЬ" — появляется, когда Portal Gun в руке
-local fireBtn = U.makeFloatingButton(
-    gui, "ОГОНЬ",
-    UDim2.new(0, 80, 0, 80),
-    UDim2.new(1, -90, 0.5, -40),
-    Color3.fromRGB(255, 50, 0),
-    function()
-        local pg = CTX.modules.PortalGun
-        if pg and pg.ShootFromCameraCenter then pg.ShootFromCameraCenter() end
-    end, false
-)
-fireBtn.TextColor3 = Color3.new(1, 1, 1)
-fireBtn.TextSize = 16
-fireBtn.Visible = false
-CTX.fireBtn = fireBtn
+local layout=Instance.new("UIListLayout")
+layout.Padding=UDim.new(0,6); layout.Parent=scroll
 
-log("Ядро загружено. GUI создан. Обработчик тапа активен.")
+-- TP30S (фиксированная)
+local tp30=U.float(gui,"TP30S",UDim2.new(0,70,0,70),UDim2.new(0,10,0,130),Color3.fromRGB(255,200,0),function()
+    local tp=C.modules.Teleport; if tp and tp.TP30S then tp.TP30S() end
+end,false)
+C.tp30=tp30
+
+-- ОГОНЬ
+local fire=U.float(gui,"ОГОНЬ",UDim2.new(0,80,0,80),UDim2.new(1,-90,0.5,-40),Color3.fromRGB(255,50,0),function()
+    local pg=C.modules.PortalGun; if pg and pg.ShootFromCameraCenter then pg.ShootFromCameraCenter() end
+end,false)
+fire.TextColor3=Color3.new(1,1,1); fire.TextSize=16; fire.Visible=false
+C.fireBtn=fire
+
+log("Part1 OK")
